@@ -1,31 +1,47 @@
+use std::path::PathBuf;
+
 use iced::{
-    Background, Border, Color, Element, Font, Task, Theme,
+    Alignment, Background, Border, Color, Element, Font, Length, Settings, Task, Theme,
     border::Radius,
     theme,
     widget::{
-        self, Grid, Scrollable, button, column, container, pick_list, row,
+        self, Grid, Scrollable, button, center, column, container, pick_list, row,
         scrollable::{Scroller, Status},
         space::{self, horizontal},
         text, text_input,
     },
 };
-use walkdir::DirEntry;
+use vecstore::Neighbor;
 
 use crate::images::{Error, find_similar_images};
 
 mod images;
 
-pub fn main() -> iced::Result {
+#[tokio::main]
+pub async fn main() -> iced::Result {
+    // tokio::spawn(embed_image_directory(PathBuf::from(
+    //     "/home/risbern21/Pictures",
+    // )));
+
     iced::application(Fuzzier::new, Fuzzier::update, Fuzzier::view)
         .title("Fuzzier")
         .theme(Fuzzier::theme)
+        .settings(Settings {
+            default_font: Font::MONOSPACE,
+            fonts: vec![
+                include_bytes!("../fonts/fuzzier-icons.ttf")
+                    .as_slice()
+                    .into(),
+            ],
+            ..Default::default()
+        })
         .run()
 }
 
 struct Fuzzier {
     file_name: String,
     file_type: FileType,
-    files_found: Option<Vec<DirEntry>>,
+    files_found: Option<Vec<Neighbor>>,
     theme: theme::Theme,
     viewport_width: u32,
     viewport_height: u32,
@@ -47,7 +63,7 @@ enum Message {
     LoadTextFiles,
     LoadImages,
     FileNameEntered(String),
-    FilesFound(Result<Vec<DirEntry>, Error>),
+    FilesFound(Result<Vec<Neighbor>, Error>),
     SearchFile,
 }
 
@@ -91,12 +107,11 @@ impl Fuzzier {
             Message::SearchFile => {
                 println!("searching");
                 Task::perform(
-                    find_similar_images(self.file_name.clone()),
+                    find_similar_images(self.file_name.clone(), 5),
                     Message::FilesFound,
                 )
             }
             Message::FilesFound(Ok(result)) => {
-                println!("files were found");
                 self.files_found = Some(result);
                 Task::none()
             }
@@ -114,11 +129,9 @@ impl Fuzzier {
     fn view(&self) -> Element<'_, Message> {
         let control_bar = {
             let search_bar = {
-                text_input(
-                    "enter the file name or anything that closely resembles the file",
-                    &self.file_name,
-                )
-                .on_input(Message::FileNameEntered)
+                text_input("image description", &self.file_name)
+                    .on_input(Message::FileNameEntered)
+                    .on_submit(Message::SearchFile)
             };
 
             let search_controls =
@@ -150,11 +163,28 @@ impl Fuzzier {
         match self.files_found {
             Some(ref files_found) => {
                 for file in files_found {
-                    let file_icon = container(column![
-                        image_file_icon(),
-                        text!("{}", file.file_name().to_os_string().into_string().unwrap())
-                    ]);
+                    let file_val = match file.metadata.fields.get("file_name") {
+                        Some(v) => match v.as_str() {
+                            Some(s) => PathBuf::from(s),
+                            None => continue,
+                        },
+                        None => continue,
+                    };
 
+                    let file_name = file_val
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    let file_extension = file_val
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "".to_string());
+
+                    let file_icon =
+                        container(column![image_file_icon(), text!("{}", file_name).center()])
+                            .style(file_icon_style)
+                            .center(50);
                     my_grid = my_grid.push(file_icon);
                 }
             }
@@ -244,7 +274,7 @@ fn empty_folder_icon<'a>() -> Element<'a, Message> {
 }
 
 fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
-    const FONT_ICON: Font = Font::with_name("text-editor-fonts");
+    const FONT_ICON: Font = Font::with_name("fuzzier-icons");
 
-    text(codepoint).font(FONT_ICON).into()
+    text(codepoint).font(FONT_ICON).size(50).center().into()
 }

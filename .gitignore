@@ -1,3 +1,4 @@
 /target
 images/
 image_store/
+*.db

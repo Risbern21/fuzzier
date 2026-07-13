@@ -2,11 +2,10 @@ extern crate walkdir;
 
 use std::{collections::HashMap, io, path::PathBuf, sync::Arc};
 
-use embed_anything::embeddings::embed::Embedder;
+use embed_anything::{embed_query, embeddings::embed::Embedder};
 use serde_json::Value;
 use uuid::Uuid;
-use vecstore::{Metadata, VecStore};
-use walkdir::{DirEntry, WalkDir};
+use vecstore::{Metadata, Neighbor, Query, VecStore};
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -15,39 +14,36 @@ pub enum Error {
     IOError(io::ErrorKind),
 }
 
-pub async fn find_similar_images(query: String) -> Result<Vec<DirEntry>, Error> {
-    let mut files = vec![];
+pub async fn find_similar_images(query: String, limit: usize) -> Result<Vec<Neighbor>, Error> {
+    let store = VecStore::open("fuzzier-store.db").unwrap();
 
-    for file in WalkDir::new("/home/risbern21/Pictures")
-        .into_iter()
-        .filter_map(|file| file.ok())
-    {
-        files.push(file);
-    }
+    let query_embedding = get_query_embedding(&query).await.unwrap();
 
-    Ok(files)
+    let query = Query::new(query_embedding).with_limit(limit);
+
+    let results = match store.query(query) {
+        Ok(results) => results,
+        Err(_) => {
+            vec![]
+        }
+    };
+
+    Ok(results)
 }
 
-fn store_image_embedding(
-    embedding: Vec<f32>,
-    image_metadata: HashMap<String, String>,
-) -> Result<(), anyhow::Error> {
-    println!("image metadata is : {:?}", image_metadata);
-    println!();
-    println!("embeddings : {:?}", embedding);
+async fn get_query_embedding(query: &str) -> Result<Vec<f32>, anyhow::Error> {
+    let text_embedder =
+        Embedder::from_pretrained_hf("openai/clip-vit-base-patch16", None, None, None)?;
 
-    let mut store = VecStore::open("fuzzier-store.db")?;
+    let embed_data = embed_query(&[query], &text_embedder, None).await.unwrap();
 
-    let fields = image_metadata
+    let embedding = embed_data
         .into_iter()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
+        .next()
+        .and_then(|e| e.embedding.to_dense().ok())
+        .ok_or_else(|| anyhow::anyhow!("no embedding returned for the query"))?;
 
-    let metadata = Metadata { fields };
-
-    let _ = store.upsert(Uuid::new_v4().to_string(), embedding, metadata);
-
-    Ok(())
+    Ok(embedding)
 }
 
 pub async fn embed_image_directory(directory: PathBuf) {
@@ -66,4 +62,27 @@ pub async fn embed_image_directory(directory: PathBuf) {
         )
         .unwrap();
     }
+}
+
+fn store_image_embedding(
+    embedding: Vec<f32>,
+    image_metadata: HashMap<String, String>,
+) -> Result<(), anyhow::Error> {
+    let mut store = VecStore::open("fuzzier-store.db")?;
+
+    let fields = image_metadata
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+
+    let metadata = Metadata { fields };
+
+    match store.upsert(Uuid::new_v4().to_string(), embedding, metadata) {
+        Ok(_) => println!("inserted successfully"),
+        Err(err) => println!("error while inserting {:?}", err),
+    };
+
+    store.save().unwrap();
+
+    Ok(())
 }
