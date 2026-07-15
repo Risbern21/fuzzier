@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    fmt::{self},
+    path::PathBuf,
+};
 
 use iced::{
     Alignment, Background, Border, Color, Element, Font, Length, Settings, Task, Theme,
@@ -11,14 +14,35 @@ use iced::{
         text, text_input,
     },
 };
+use serde::{Deserialize, Serialize};
 use vecstore::Neighbor;
 
-use crate::images::{Error, find_similar_images};
+use crate::{
+    FuzzierTheme::{Dark, Dracula, Light},
+    config::update_theme,
+    embedding::{Error, find_similar_images},
+};
 
-mod images;
+mod config;
+mod embedding;
 
 #[tokio::main]
 pub async fn main() -> iced::Result {
+    let mut config_dir = dirs::config_dir().expect("unable to find config directory\n");
+    config_dir.push("fuzzier");
+    std::fs::create_dir_all(&config_dir).expect("unable to create fuzzier config directory\n");
+
+    let config_path = config_dir.join("config.json");
+
+    drop(config_dir);
+
+    let _ = &mut std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(config_path)
+        .expect("unable to create fuzzier config file\n");
+
     iced::application(Fuzzier::new, Fuzzier::update, Fuzzier::view)
         .title("Fuzzier")
         .theme(Fuzzier::theme)
@@ -39,48 +63,34 @@ struct Fuzzier {
     file_type: FileType,
     files_found: Option<Vec<Neighbor>>,
     file_limit: String,
-    theme: theme::Theme,
+    theme: FuzzierTheme,
     grid_columns: usize,
     selected_file: Option<usize>,
     error: Option<Error>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileType {
-    All,
-    Text,
-    Images,
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    ChangeTheme(theme::Theme),
-    LoadAllFiles,
-    LoadTextFiles,
-    LoadImages,
-    FileNameEntered(String),
-    FileLimitSet(String),
-    FilesFound(Result<Vec<Neighbor>, Error>),
-    FileSelected(usize),
-    SearchFile,
-}
-
 impl Fuzzier {
     fn new() -> Self {
+        let user_preferences = config::get_config();
+
         Self {
             file_name: String::from(""),
             file_type: FileType::All,
             files_found: None,
             file_limit: String::from("5"),
-            theme: theme::Theme::SolarizedDark,
+            theme: user_preferences.theme,
             grid_columns: 6,
             selected_file: None,
             error: None,
         }
     }
 
-    fn theme(fuzzier: &Fuzzier) -> Option<Theme> {
-        Some(fuzzier.theme.clone())
+    fn theme(fuzzier: &Fuzzier) -> Option<theme::Theme> {
+        match fuzzier.theme {
+            Light => Some(theme::Theme::Light),
+            Dark => Some(theme::Theme::Dark),
+            Dracula => Some(theme::Theme::Dracula),
+        }
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -132,6 +142,7 @@ impl Fuzzier {
                 Task::none()
             }
             Message::ChangeTheme(theme) => {
+                update_theme(&theme);
                 self.theme = theme;
                 Task::none()
             }
@@ -160,9 +171,10 @@ impl Fuzzier {
                 .padding([8, 16])
                 .style(primary_button_style);
 
-            let theme_picker = pick_list(Theme::ALL, Some(&self.theme), Message::ChangeTheme)
-                .padding(8)
-                .width(Length::Fixed(170.0));
+            let theme_picker =
+                pick_list(FuzzierTheme::ALL, Some(&self.theme), Message::ChangeTheme)
+                    .padding(8)
+                    .width(Length::Fixed(170.0));
 
             container(
                 row![
@@ -272,12 +284,9 @@ impl Fuzzier {
             )
             .into(),
             None => center(
-                column![
-                    text("Search for something").size(16),
-                    text("Results will appear here as icons, just like your file manager").size(12),
-                ]
-                .align_x(Alignment::Center)
-                .spacing(6),
+                column![text("Search for something").size(16),]
+                    .align_x(Alignment::Center)
+                    .spacing(6),
             )
             .into(),
         };
@@ -306,6 +315,51 @@ impl Fuzzier {
 
         column![toolbar, body, status_bar].into()
     }
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    ChangeTheme(FuzzierTheme),
+    LoadAllFiles,
+    LoadTextFiles,
+    LoadImages,
+    FileNameEntered(String),
+    FileLimitSet(String),
+    FilesFound(Result<Vec<Neighbor>, Error>),
+    FileSelected(usize),
+    SearchFile,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+enum FuzzierTheme {
+    Light,
+    Dark,
+    Dracula,
+}
+
+impl FuzzierTheme {
+    pub const ALL: &'static [Self] = &[Self::Light, Self::Dark, Self::Dracula];
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Dracula => "Dracula",
+        }
+    }
+}
+
+impl fmt::Display for FuzzierTheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileType {
+    All,
+    Text,
+    Images,
 }
 
 fn toolbar_style(theme: &Theme) -> widget::container::Style {
@@ -498,7 +552,6 @@ fn icon_for_extension<'a>(extension: &str) -> Element<'a, Message> {
     }
 }
 
-#[allow(dead_code)]
 fn generic_file_icon<'a>(size: f32) -> Element<'a, Message> {
     icon('\u{E800}', size)
 }
@@ -515,7 +568,6 @@ fn folder_icon<'a>(size: f32) -> Element<'a, Message> {
     icon('\u{F114}', size)
 }
 
-#[allow(dead_code)]
 fn empty_folder_icon<'a>(size: f32) -> Element<'a, Message> {
     icon('\u{F115}', size)
 }

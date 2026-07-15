@@ -1,5 +1,3 @@
-extern crate walkdir;
-
 use std::{collections::HashMap, io, path::PathBuf, sync::Arc};
 
 use embed_anything::{embed_query, embeddings::embed::Embedder};
@@ -33,7 +31,7 @@ pub async fn find_similar_images(query: String, limit: usize) -> Result<Vec<Neig
 
 async fn get_query_embedding(query: &str) -> Result<Vec<f32>, anyhow::Error> {
     let text_embedder =
-        Embedder::from_pretrained_hf("openai/clip-vit-base-patch16", None, None, None)?;
+        Embedder::from_pretrained_hf("openai/clip-vit-base-patch16", None, None, None, None)?;
 
     let embed_data = embed_query(&[query], &text_embedder, None).await.unwrap();
 
@@ -48,7 +46,8 @@ async fn get_query_embedding(query: &str) -> Result<Vec<f32>, anyhow::Error> {
 
 pub async fn embed_image_directory(directory: PathBuf) {
     let embedder = Arc::new(
-        Embedder::from_pretrained_hf("openai/clip-vit-base-patch16", None, None, None).unwrap(),
+        Embedder::from_pretrained_hf("openai/clip-vit-base-patch16", None, None, None, None)
+            .unwrap(),
     );
     let embeddings = embed_anything::embed_image_directory(directory, &embedder, None, None)
         .await
