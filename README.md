@@ -8,3 +8,5 @@ The GUI is written in Rust (Iced) because:
 ---
 ## Generating embeddings
 "openai/clip-vit-base-patch16" is a pretty lightweight (~1.2GB) model so it can be run even with a cpu without much performance drop.
+
+PS: ikik using a 1.2GB model for searching a file is overkill!!
