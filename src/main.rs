@@ -6,8 +6,8 @@ use iced::{
     theme,
     widget::{
         self, Grid, Scrollable, button, center, column, container, pick_list, row,
-        scrollable::{Scroller, Status},
-        space::{self, horizontal},
+        scrollable::{Scroller, Status as ScrollableStatus},
+        space::horizontal,
         text, text_input,
     },
 };
@@ -43,13 +43,12 @@ struct Fuzzier {
     file_type: FileType,
     files_found: Option<Vec<Neighbor>>,
     theme: theme::Theme,
-    viewport_width: u32,
-    viewport_height: u32,
     grid_columns: usize,
-    grid_width: u32,
+    selected_file: Option<usize>,
     error: Option<Error>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileType {
     All,
     Text,
@@ -64,6 +63,7 @@ enum Message {
     LoadImages,
     FileNameEntered(String),
     FilesFound(Result<Vec<Neighbor>, Error>),
+    FileSelected(usize),
     SearchFile,
 }
 
@@ -72,12 +72,10 @@ impl Fuzzier {
         Self {
             file_name: String::from(""),
             file_type: FileType::All,
-            files_found: Some(vec![]),
+            files_found: None,
             theme: theme::Theme::SolarizedDark,
-            viewport_width: 3000,
-            viewport_height: 3000,
             grid_columns: 6,
-            grid_width: 3000,
+            selected_file: None,
             error: None,
         }
     }
@@ -105,7 +103,8 @@ impl Fuzzier {
                 Task::none()
             }
             Message::SearchFile => {
-                println!("searching");
+                self.error = None;
+                self.selected_file = None;
                 Task::perform(
                     find_similar_images(self.file_name.clone(), 5),
                     Message::FilesFound,
@@ -119,6 +118,10 @@ impl Fuzzier {
                 self.error = Some(error);
                 Task::none()
             }
+            Message::FileSelected(index) => {
+                self.selected_file = Some(index);
+                Task::none()
+            }
             Message::ChangeTheme(theme) => {
                 self.theme = theme;
                 Task::none()
@@ -127,42 +130,72 @@ impl Fuzzier {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let control_bar = {
-            let search_bar = {
-                text_input("image description", &self.file_name)
-                    .on_input(Message::FileNameEntered)
-                    .on_submit(Message::SearchFile)
-            };
+        // Toolbar
+        let toolbar = {
+            let title = text("Fuzzier").size(18).font(Font::MONOSPACE);
 
-            let search_controls =
-                row![search_bar, action("Search", Message::SearchFile)].spacing(10);
+            let search_bar = text_input("Search images by description…", &self.file_name)
+                .on_input(Message::FileNameEntered)
+                .on_submit(Message::SearchFile)
+                .padding(8)
+                .width(Length::Fixed(340.0));
 
-            row![
-                pick_list(Theme::ALL, Some(&self.theme), Message::ChangeTheme),
-                horizontal(),
-                search_controls
-            ]
+            let search_button = button(text("Search").size(14).center())
+                .on_press(Message::SearchFile)
+                .padding([8, 16])
+                .style(primary_button_style);
+
+            let theme_picker = pick_list(Theme::ALL, Some(&self.theme), Message::ChangeTheme)
+                .padding(8)
+                .width(Length::Fixed(170.0));
+
+            container(
+                row![title, horizontal(), search_bar, search_button, theme_picker,]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+            )
+            .padding(12)
+            .width(Length::Fill)
+            .style(toolbar_style)
         };
 
-        let controls = {
-            let buttons = column![
-                action("All", Message::LoadAllFiles),
-                action("Text", Message::LoadTextFiles),
-                action("Images", Message::LoadImages),
+        // Sidebar
+        let sidebar = {
+            let items = column![
+                sidebar_item(
+                    "All Files",
+                    folder_icon(18.0),
+                    self.file_type == FileType::All,
+                    Message::LoadAllFiles,
+                ),
+                sidebar_item(
+                    "Text",
+                    text_file_icon(18.0),
+                    self.file_type == FileType::Text,
+                    Message::LoadTextFiles,
+                ),
+                sidebar_item(
+                    "Images",
+                    image_file_icon(18.0),
+                    self.file_type == FileType::Images,
+                    Message::LoadImages,
+                ),
             ]
-            .spacing(10);
+            .spacing(4);
 
-            column![buttons, space::vertical(),]
+            container(column![text("Locations").size(12), items].spacing(8))
+                .padding(12)
+                .width(Length::Fixed(190.0))
+                .height(Length::Fill)
+                .style(sidebar_style)
         };
 
-        let mut my_grid = Grid::new()
-            .columns(self.grid_columns)
-            .width(self.grid_width)
-            .spacing(10);
+        // File grid
+        let grid_view: Element<'_, Message> = match &self.files_found {
+            Some(files_found) if !files_found.is_empty() => {
+                let mut file_grid = Grid::new().columns(self.grid_columns).spacing(18);
 
-        match self.files_found {
-            Some(ref files_found) => {
-                for file in files_found {
+                for (index, file) in files_found.iter().enumerate() {
                     let file_val = match file.metadata.fields.get("file_name") {
                         Some(v) => match v.as_str() {
                             Some(s) => PathBuf::from(s),
@@ -178,103 +211,294 @@ impl Fuzzier {
 
                     let file_extension = file_val
                         .extension()
-                        .map(|e| e.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "".to_string());
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
 
-                    let file_icon =
-                        container(column![image_file_icon(), text!("{}", file_name).center()])
-                            .style(file_icon_style)
-                            .center(50);
-                    my_grid = my_grid.push(file_icon);
+                    let selected = self.selected_file == Some(index);
+
+                    let tile_content = column![
+                        container(icon_for_extension(&file_extension)).center(56),
+                        text(file_name).size(12).center(),
+                    ]
+                    .align_x(Alignment::Center)
+                    .spacing(6)
+                    .width(Length::Fixed(96.0));
+
+                    let tile = button(tile_content)
+                        .on_press(Message::FileSelected(index))
+                        .padding(10)
+                        .style(move |theme: &Theme, status| {
+                            file_tile_style(theme, status, selected)
+                        });
+
+                    file_grid = file_grid.push(tile);
                 }
+
+                Scrollable::new(container(file_grid).padding(20).width(Length::Fill))
+                    .style(scrollable_grid_style)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
-            None => eprintln!("no files found"),
-        }
+            Some(_) => center(
+                column![
+                    text("No results").size(16),
+                    text("Try a different search term").size(12),
+                ]
+                .align_x(Alignment::Center)
+                .spacing(6),
+            )
+            .into(),
+            None => center(
+                column![
+                    text("Search for something").size(16),
+                    text("Results will appear here as icons, just like your file manager").size(12),
+                ]
+                .align_x(Alignment::Center)
+                .spacing(6),
+            )
+            .into(),
+        };
 
-        let scrollable_grid = Scrollable::new(my_grid).style(scrollable_grid_style);
+        let content = container(grid_view)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(content_style);
 
-        let viewport = container(scrollable_grid)
-            .padding(20)
-            .width(self.viewport_width)
-            .height(self.viewport_height)
-            .style(viewport_style);
+        // Status bar
+        let status_bar = {
+            let status_text = if self.error.is_some() {
+                "Something went wrong while searching".to_string()
+            } else {
+                let count = self.files_found.as_ref().map(|f| f.len()).unwrap_or(0);
+                format!("{count} item{}", if count == 1 { "" } else { "s" })
+            };
 
-        container(column![control_bar, row![controls, viewport].spacing(10)].spacing(10))
-            .padding(10)
-            .into()
+            container(text(status_text).size(12))
+                .padding([6, 12])
+                .width(Length::Fill)
+                .style(status_bar_style)
+        };
+
+        let body = row![sidebar, content].height(Length::Fill);
+
+        column![toolbar, body, status_bar].into()
     }
 }
 
-fn viewport_style(theme: &Theme) -> widget::container::Style {
+fn toolbar_style(theme: &Theme) -> widget::container::Style {
+    let palette = theme.extended_palette();
     widget::container::Style {
+        background: Some(Background::Color(palette.background.weak.color)),
         border: Border {
-            color: theme.palette().primary.into(),
-            width: 2.0.into(),
-            radius: Radius::new(5.0),
+            color: palette.background.strong.color,
+            width: 0.0,
+            radius: Radius::new(0.0),
+        },
+        text_color: Some(palette.background.base.text),
+        ..Default::default()
+    }
+}
+
+fn sidebar_style(theme: &Theme) -> widget::container::Style {
+    let palette = theme.extended_palette();
+    widget::container::Style {
+        background: Some(Background::Color(palette.background.weak.color)),
+        border: Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: Radius::new(0.0),
+        },
+        text_color: Some(palette.background.base.text),
+        ..Default::default()
+    }
+}
+
+fn content_style(theme: &Theme) -> widget::container::Style {
+    let palette = theme.extended_palette();
+    widget::container::Style {
+        background: Some(Background::Color(palette.background.base.color)),
+        ..Default::default()
+    }
+}
+
+fn status_bar_style(theme: &Theme) -> widget::container::Style {
+    let palette = theme.extended_palette();
+    widget::container::Style {
+        background: Some(Background::Color(palette.background.weak.color)),
+        border: Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: Radius::new(0.0),
+        },
+        text_color: Some(palette.background.base.text.scale_alpha(0.7)),
+        ..Default::default()
+    }
+}
+
+fn sidebar_button_style(
+    theme: &Theme,
+    status: widget::button::Status,
+    selected: bool,
+) -> widget::button::Style {
+    let palette = theme.extended_palette();
+
+    let background = if selected {
+        Some(Background::Color(palette.primary.base.color))
+    } else {
+        match status {
+            widget::button::Status::Hovered => {
+                Some(Background::Color(palette.background.strong.color))
+            }
+            _ => None,
+        }
+    };
+
+    let text_color = if selected {
+        palette.primary.base.text
+    } else {
+        palette.background.base.text
+    };
+
+    widget::button::Style {
+        background,
+        text_color,
+        border: Border {
+            radius: Radius::new(6.0),
+            ..Default::default()
         },
         ..Default::default()
     }
 }
 
-fn scrollable_grid_style<'a>(theme: &'a Theme, status: Status) -> widget::scrollable::Style {
-    let mut style = widget::scrollable::default(&theme, status);
+fn file_tile_style(
+    theme: &Theme,
+    status: widget::button::Status,
+    selected: bool,
+) -> widget::button::Style {
+    let palette = theme.extended_palette();
+
+    let background = if selected {
+        Some(Background::Color(palette.primary.weak.color))
+    } else {
+        match status {
+            widget::button::Status::Hovered => {
+                Some(Background::Color(palette.background.weak.color))
+            }
+            _ => None,
+        }
+    };
+
+    let border_color = if selected {
+        palette.primary.base.color
+    } else {
+        Color::TRANSPARENT
+    };
+
+    widget::button::Style {
+        background,
+        text_color: palette.background.base.text,
+        border: Border {
+            color: border_color,
+            width: 1.5,
+            radius: Radius::new(10.0),
+        },
+        ..Default::default()
+    }
+}
+
+fn primary_button_style(theme: &Theme, status: widget::button::Status) -> widget::button::Style {
+    let palette = theme.extended_palette();
+
+    let background = match status {
+        widget::button::Status::Hovered | widget::button::Status::Pressed => {
+            palette.primary.strong.color
+        }
+        _ => palette.primary.base.color,
+    };
+
+    widget::button::Style {
+        background: Some(Background::Color(background)),
+        text_color: palette.primary.base.text,
+        border: Border {
+            radius: Radius::new(6.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn scrollable_grid_style(theme: &Theme, status: ScrollableStatus) -> widget::scrollable::Style {
+    let palette = theme.extended_palette();
+    let mut style = widget::scrollable::default(theme, status);
 
     style.vertical_rail.scroller = Scroller {
-        background: Background::Color(Color::WHITE),
+        background: Background::Color(palette.primary.base.color),
         border: Border {
-            color: Color::BLACK,
+            color: Color::TRANSPARENT,
             width: 0.0,
-            radius: Radius {
-                top_left: 10.0,
-                top_right: 10.0,
-                bottom_right: 10.0,
-                bottom_left: 10.0,
-            },
+            radius: Radius::new(10.0),
         },
     };
 
     style
 }
+fn sidebar_item<'a>(
+    label: &'a str,
+    icon: Element<'a, Message>,
+    selected: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let content = row![
+        container(icon).width(Length::Fixed(24.0)).center_y(24),
+        text(label).size(13),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
 
-fn file_icon_style(theme: &Theme) -> widget::container::Style {
-    widget::container::Style {
-        border: Border {
-            color: theme.palette().primary.into(),
-            width: 2.0.into(),
-            radius: Radius::new(5.0),
-        },
-        ..Default::default()
-    }
-}
-
-fn action<'a>(content: &'a str, on_press: Message) -> Element<'a, Message> {
-    button(container(content).center_x(80).center_y(20))
+    button(content)
         .on_press(on_press)
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(move |theme: &Theme, status| sidebar_button_style(theme, status, selected))
         .into()
 }
 
-fn generic_file_icon<'a>() -> Element<'a, Message> {
-    icon('\u{E800}')
+fn icon_for_extension<'a>(extension: &str) -> Element<'a, Message> {
+    match extension {
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "tiff" | "heic" => {
+            image_file_icon(36.0)
+        }
+        "txt" | "md" | "rs" | "toml" | "json" | "yaml" | "yml" | "csv" | "log" | "conf" => {
+            text_file_icon(36.0)
+        }
+        _ => generic_file_icon(36.0),
+    }
 }
 
-fn image_file_icon<'a>() -> Element<'a, Message> {
-    icon('\u{E802}')
+#[allow(dead_code)]
+fn generic_file_icon<'a>(size: f32) -> Element<'a, Message> {
+    icon('\u{E800}', size)
 }
 
-fn text_file_icon<'a>() -> Element<'a, Message> {
-    icon('\u{F0F6}')
+fn image_file_icon<'a>(size: f32) -> Element<'a, Message> {
+    icon('\u{E802}', size)
 }
 
-fn folder_icon<'a>() -> Element<'a, Message> {
-    icon('\u{F114}')
+fn text_file_icon<'a>(size: f32) -> Element<'a, Message> {
+    icon('\u{F0F6}', size)
 }
 
-fn empty_folder_icon<'a>() -> Element<'a, Message> {
-    icon('\u{F115}')
+fn folder_icon<'a>(size: f32) -> Element<'a, Message> {
+    icon('\u{F114}', size)
 }
 
-fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
+#[allow(dead_code)]
+fn empty_folder_icon<'a>(size: f32) -> Element<'a, Message> {
+    icon('\u{F115}', size)
+}
+
+fn icon<'a>(codepoint: char, size: f32) -> Element<'a, Message> {
     const FONT_ICON: Font = Font::with_name("fuzzier-icons");
-
-    text(codepoint).font(FONT_ICON).size(50).center().into()
+    text(codepoint).font(FONT_ICON).size(size).center().into()
 }
