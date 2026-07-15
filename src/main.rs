@@ -19,10 +19,6 @@ mod images;
 
 #[tokio::main]
 pub async fn main() -> iced::Result {
-    // tokio::spawn(embed_image_directory(PathBuf::from(
-    //     "/home/risbern21/Pictures",
-    // )));
-
     iced::application(Fuzzier::new, Fuzzier::update, Fuzzier::view)
         .title("Fuzzier")
         .theme(Fuzzier::theme)
@@ -42,6 +38,7 @@ struct Fuzzier {
     file_name: String,
     file_type: FileType,
     files_found: Option<Vec<Neighbor>>,
+    file_limit: String,
     theme: theme::Theme,
     grid_columns: usize,
     selected_file: Option<usize>,
@@ -62,6 +59,7 @@ enum Message {
     LoadTextFiles,
     LoadImages,
     FileNameEntered(String),
+    FileLimitSet(String),
     FilesFound(Result<Vec<Neighbor>, Error>),
     FileSelected(usize),
     SearchFile,
@@ -73,6 +71,7 @@ impl Fuzzier {
             file_name: String::from(""),
             file_type: FileType::All,
             files_found: None,
+            file_limit: String::from("5"),
             theme: theme::Theme::SolarizedDark,
             grid_columns: 6,
             selected_file: None,
@@ -102,11 +101,21 @@ impl Fuzzier {
                 self.file_name = name;
                 Task::none()
             }
+            Message::FileLimitSet(limit) => {
+                self.file_limit = limit;
+                Task::none()
+            }
             Message::SearchFile => {
                 self.error = None;
                 self.selected_file = None;
+
+                if self.file_name == "" {
+                    return Task::none();
+                }
+
+                let limit = self.file_limit.parse().unwrap_or(5);
                 Task::perform(
-                    find_similar_images(self.file_name.clone(), 5),
+                    find_similar_images(self.file_name.clone(), limit),
                     Message::FilesFound,
                 )
             }
@@ -140,6 +149,12 @@ impl Fuzzier {
                 .padding(8)
                 .width(Length::Fixed(340.0));
 
+            let limiter = text_input("limit", &self.file_limit)
+                .on_input(Message::FileLimitSet)
+                .on_submit(Message::SearchFile)
+                .padding(8)
+                .width(Length::Fixed(60.0));
+
             let search_button = button(text("Search").size(14).center())
                 .on_press(Message::SearchFile)
                 .padding([8, 16])
@@ -150,9 +165,16 @@ impl Fuzzier {
                 .width(Length::Fixed(170.0));
 
             container(
-                row![title, horizontal(), search_bar, search_button, theme_picker,]
-                    .spacing(12)
-                    .align_y(Alignment::Center),
+                row![
+                    title,
+                    horizontal(),
+                    search_bar,
+                    limiter,
+                    search_button,
+                    theme_picker,
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
             )
             .padding(12)
             .width(Length::Fill)
@@ -183,7 +205,7 @@ impl Fuzzier {
             ]
             .spacing(4);
 
-            container(column![text("Locations").size(12), items].spacing(8))
+            container(column![text("File Types").size(12), items].spacing(8))
                 .padding(12)
                 .width(Length::Fixed(190.0))
                 .height(Length::Fill)
